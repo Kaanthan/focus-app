@@ -8,6 +8,12 @@ import 'react-native-reanimated';
 import { AuthProvider } from '@/components/AuthProvider';
 import { SubscriptionProvider } from '@/components/SubscriptionProvider';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'https://4c415993d778216bb538b8d714b399a2@o4510774126903296.ingest.us.sentry.io/4510862278918144',
+  debug: true, // If true, Sentry will try to print out useful debugging information if something goes wrong with sending the event. Set it to false in production
+});
 
 // Ignore specific development warnings
 LogBox.ignoreLogs([
@@ -22,7 +28,7 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useColorScheme();
 
   useEffect(() => {
@@ -45,3 +51,5 @@ export default function RootLayout() {
     </AuthProvider>
   );
 }
+
+export default Sentry.wrap(RootLayout);
