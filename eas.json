@@ -15,7 +15,9 @@
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_GOOGLE_AI_API_KEY": "AIzaSyCPxA7Hm0WDw2d8PFqAk2qDVtkg43l_9us",
-        "EXPO_PUBLIC_REVENUECAT_IOS_API_KEY": "appl_DCmawbVUjeElBlTSmEBhyxZzTHs"
+        "EXPO_PUBLIC_REVENUECAT_IOS_API_KEY": "appl_DCmawbVUjeElBlTSmEBhyxZzTHs",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ksucaeacrqmypvwvgzcd.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtzdWNhZWFjcnFteXB2d3ZnemNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3MTcxMjEsImV4cCI6MjA4NjI5MzEyMX0.ouYx-njA4eAtlFN53-2AXA85LbNixu3Bcgcm_02XjAs"
       }
     }
   },
