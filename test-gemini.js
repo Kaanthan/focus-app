@@ -10,23 +10,27 @@ if (!apiKey) {
 
 async function run() {
     try {
-        console.log("Testing generation with gemini-2.5-flash...");
+        console.log("Listing available models...");
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }, { apiVersion: 'v1beta' });
+        // For listing models, we don't need getGenerativeModel, we need a different approach or just test specific known ones.
+        // Actually the SDK doesn't have a direct listModels on genAI instance in some versions?
+        // Let's use the API directly via fetch to be sure, or try the model manager if available.
+        // But the error message said "Call ListModels to see...".
+        // The Node SDK might expose this via GoogleGenerativeAI.getGenerativeModel... wait.
 
-        const result = await model.generateContent("Hello, does this work?");
-        const response = await result.response;
-        const text = response.text();
-        console.log("Success! Response: ", text);
+        // Let's just try to hit the REST API to list models, it's more reliable for debugging.
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        const data = await response.json();
+
+        if (data.models) {
+            console.log("Available Models:");
+            data.models.forEach(m => console.log(`- ${m.name} (${m.supportedGenerationMethods})`));
+        } else {
+            console.log("No models found or error:", data);
+        }
 
     } catch (error) {
-        console.error("Generation Failed:");
-        if (error.response) {
-            console.error("Status:", error.response.status);
-            console.error("Data:", await error.response.json());
-        } else {
-            console.error(error);
-        }
+        console.error("List Models Failed:", error);
     }
 }
 

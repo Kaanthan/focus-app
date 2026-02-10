@@ -1,62 +1,125 @@
+
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import Purchases from 'react-native-purchases';
+import { Alert, Platform } from 'react-native';
+import Purchases, { PurchasesPackage } from 'react-native-purchases';
 
 interface SubscriptionContextType {
     isPro: boolean;
+    purchasePackage: (pack: PurchasesPackage) => Promise<void>;
+    restorePurchases: () => Promise<void>;
+    offerings: PurchasesPackage[];
+    setProStatus: (status: boolean) => void; // For debug/testing
 }
 
-const SubscriptionContext = createContext<SubscriptionContextType>({ isPro: false });
+const SubscriptionContext = createContext<SubscriptionContextType>({
+    isPro: false,
+    purchasePackage: async () => { },
+    restorePurchases: async () => { },
+    offerings: [],
+    setProStatus: () => { }
+});
 
 export const useSubscription = () => useContext(SubscriptionContext);
 
 export const SubscriptionProvider = ({ children }: { children: React.ReactNode }) => {
     const [isPro, setIsPro] = useState(false);
+    const [offerings, setOfferings] = useState<PurchasesPackage[]>([]);
 
     useEffect(() => {
-        const checkSubscription = async () => {
-            try {
-                const customerInfo = await Purchases.getCustomerInfo();
-                const isActive = customerInfo.entitlements.active['Focus App Pro'] !== undefined;
-                console.log('Current Pro Status for Focus App Pro: ' + isActive);
-                if (isActive) {
-                    setIsPro(true);
-                }
-            } catch (e) {
-                // Error fetching customer info
-                console.error("Error fetching customer info", e);
+        const initPurchases = async () => {
+            if (Platform.OS === 'web') {
+                console.log("RevenueCat not supported on web");
+                return;
+            }
+
+            const apiKey = Platform.OS === 'android'
+                ? process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY
+                : process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
+
+            if (apiKey) {
+                console.log("Configuring RevenueCat with API Key ending in:", apiKey.slice(-4));
+                await Purchases.configure({ apiKey });
+
+                // Load data after config
+                checkSubscription();
+                loadOfferings();
+
+                Purchases.addCustomerInfoUpdateListener(customerInfoUpdated);
+            } else {
+                console.warn("No RevenueCat API Key found for this platform. App running in Mock Mode.");
             }
         };
 
-        checkSubscription();
-
-        // Listen for updates
-        const customerInfoUpdated = async (info: any) => {
-            const isActive = info.entitlements.active['Focus App Pro'] !== undefined;
-            console.log('Current Pro Status for Focus App Pro (Listener): ' + isActive);
-            if (isActive) {
-                setIsPro(true);
-            } else {
-                setIsPro(false);
+        const checkSubscription = async () => {
+            try {
+                console.log("Fetching customer info...");
+                const customerInfo = await Purchases.getCustomerInfo();
+                const isActive = customerInfo.entitlements.active['Focus App Pro'] !== undefined; // Use correct entitlement ID
+                if (isActive) setIsPro(true);
+            } catch (e: any) {
+                console.log("Error fetching customer info", e);
             }
+        };
+
+        const loadOfferings = async () => {
+            try {
+                console.log("Fetching offerings...");
+                const offerings = await Purchases.getOfferings();
+                console.log("Offerings fetched:", JSON.stringify(offerings));
+                if (offerings.current !== null && offerings.current.availablePackages.length !== 0) {
+                    console.log("Setting available packages:", offerings.current.availablePackages.length);
+                    setOfferings(offerings.current.availablePackages);
+                } else {
+                    console.log("No current offerings found or availablePackages empty.");
+                }
+            } catch (e) {
+                console.log("Error fetching offerings", e);
+            }
+        };
+
+        const customerInfoUpdated = (info: any) => {
+            const isActive = info.entitlements.active['Focus App Pro'] !== undefined;
+            setIsPro(isActive);
         }
 
-        try {
-            Purchases.addCustomerInfoUpdateListener(customerInfoUpdated);
-        } catch (e) {
-            console.log("Error adding listener", e)
-        }
+        initPurchases();
 
         return () => {
-            try {
+            if (Platform.OS !== 'web') {
                 Purchases.removeCustomerInfoUpdateListener(customerInfoUpdated);
-            } catch (e) {
-                console.log("Error removing listener", e)
             }
         };
     }, []);
 
+    const purchasePackage = async (pack: PurchasesPackage) => {
+        try {
+            const { customerInfo } = await Purchases.purchasePackage(pack);
+            if (customerInfo.entitlements.active['Focus App Pro'] !== undefined) {
+                setIsPro(true);
+            }
+        } catch (e: any) {
+            if (!e.userCancelled) {
+                Alert.alert("Purchase Error", e.message);
+            }
+        }
+    };
+
+    const restorePurchases = async () => {
+        try {
+            const customerInfo = await Purchases.restorePurchases();
+            if (customerInfo.entitlements.active['Focus App Pro'] !== undefined) {
+                setIsPro(true);
+                Alert.alert("Success", "Your purchases have been restored.");
+            } else {
+                Alert.alert("No Purchases", "No active subscriptions found to restore.");
+            }
+        } catch (e: any) {
+            Alert.alert("Restore Error", e.message);
+        }
+    };
+
     return (
-        <SubscriptionContext.Provider value={{ isPro }}>
+        <SubscriptionContext.Provider value={{ isPro, purchasePackage, restorePurchases, offerings, setProStatus: setIsPro }}>
             {children}
         </SubscriptionContext.Provider>
     );

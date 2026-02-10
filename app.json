@@ -4,12 +4,16 @@
     "slug": "focus",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/focus_icon.png",
     "scheme": "focus",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.serisuria.focus",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -47,6 +51,7 @@
     },
     "extra": {
       "router": {},
+      "revenueCatApiKey": "appl_DCmawbVUjeElBlTSmEBhyxZzTHs",
       "eas": {
         "projectId": "78c31fe2-1c74-4931-b5df-4b6f3991a471"
       }

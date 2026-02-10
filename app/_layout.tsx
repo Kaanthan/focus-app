@@ -1,13 +1,21 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
+import { LogBox } from 'react-native';
 import 'react-native-reanimated';
 
 import { SubscriptionProvider } from '@/components/SubscriptionProvider';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useEffect } from 'react';
-import { Platform } from 'react-native';
-import Purchases from 'react-native-purchases';
+
+// Ignore specific development warnings
+LogBox.ignoreLogs([
+  'GoogleGenerativeAI Error',
+  'Error sending message',
+  'The native view manager for module',
+]);
+
+// Prevent the splash screen from auto-hiding before asset loading is complete.
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -17,19 +25,9 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   useEffect(() => {
-    Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
-
-    if (Platform.OS === 'android') {
-      const apiKey = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
-      if (apiKey) {
-        Purchases.configure({ apiKey });
-      }
-    } else if (Platform.OS === 'ios') {
-      const apiKey = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
-      if (apiKey) {
-        Purchases.configure({ apiKey });
-      }
-    }
+    // MOCK NOTIFICATIONS (Day 5 Feature)
+    console.log('🔔 [Mock] Scheduling Notification: "What is your ONE thing?" for 9:00 AM');
+    console.log('🔔 [Mock] Scheduling Notification: "Did you ship it?" for 5:00 PM');
   }, []);
 
   return (

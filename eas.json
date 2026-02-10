@@ -12,7 +12,11 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_AI_API_KEY": "AIzaSyCPxA7Hm0WDw2d8PFqAk2qDVtkg43l_9us",
+        "EXPO_PUBLIC_REVENUECAT_IOS_API_KEY": "appl_DCmawbVUjeElBlTSmEBhyxZzTHs"
+      }
     }
   },
   "submit": {
