@@ -49,7 +49,7 @@ export default function SurveyScreen() {
                     ...answers,
                     pursuit: answers.role // Saving role as pursuit as well for clarity if needed
                 }));
-                router.replace('/(tabs)');
+                router.replace('/auth');
             } catch (e) {
                 console.error("Failed to save persona", e);
             }

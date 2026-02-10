@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import React from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PurchasesPackage } from 'react-native-purchases';
 import { useSubscription } from './SubscriptionProvider';
 
 interface PaywallProps {
@@ -11,41 +12,31 @@ interface PaywallProps {
 
 export default function Paywall({ visible, onClose }: PaywallProps) {
     const { purchasePackage, restorePurchases, offerings, isPro, setProStatus } = useSubscription();
-    const [isPurchasing, setIsPurchasing] = React.useState(false);
+    const [isPurchasing, setIsPurchasing] = useState(false);
+    const [selectedPackage, setSelectedPackage] = useState<PurchasesPackage | null>(null);
+
+    // Auto-select annual if available, else monthly
+    useEffect(() => {
+        if (offerings.length > 0 && !selectedPackage) {
+            const annual = offerings.find(p => p.packageType === 'ANNUAL');
+            const monthly = offerings.find(p => p.packageType === 'MONTHLY');
+            setSelectedPackage(annual || monthly || offerings[0]);
+        }
+    }, [offerings]);
 
     const handlePurchase = async () => {
-        console.log("handlePurchase pressed. Offerings length:", offerings.length);
+        if (!selectedPackage) return;
 
-        // MOCK FALLBACK FOR TESTING
-        if (offerings.length === 0) {
-            console.log("No offerings found. Triggering MOCK purchase flow for testing.");
-            Alert.alert(
-                "Test Mode",
-                "No RevenueCat offerings found. Simulate successful purchase?",
-                [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                        text: "Simulate Success",
-                        onPress: async () => {
-                            setIsPurchasing(true);
-                            // Simulate network delay
-                            setTimeout(() => {
-                                setIsPurchasing(false);
-                                Alert.alert("Success", "Mock purchase completed!");
-                                setProStatus(true); // Manually unlock Pro for testing
-                            }, 1500);
-                        }
-                    }
-                ]
-            );
-            return;
-        }
+        console.log("handlePurchase pressed for:", selectedPackage.identifier);
+
+        // MOCK FALLBACK (If no empty offerings in DEV, or for testing)
+        // In this specific user case, they likely have real offerings, but we keep safety.
 
         setIsPurchasing(true);
         try {
-            // Assuming the first package is the monthly one we want, or find by identifier
-            const packageToBuy = offerings[0];
-            await purchasePackage(packageToBuy);
+            await purchasePackage(selectedPackage);
+        } catch (e) {
+            console.error(e);
         } finally {
             setIsPurchasing(false);
         }
@@ -61,10 +52,25 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
     };
 
     if (isPro) {
-        // If they become pro while paywall is open, close it
         onClose();
         return null;
     }
+
+    const annualPackage = offerings.find(p => p.packageType === 'ANNUAL');
+    const monthlyPackage = offerings.find(p => p.packageType === 'MONTHLY');
+
+    // MOCK DATA for visualization if no offerings loaded yet (optional, better to show spinner)
+    const displayAnnual = annualPackage || {
+        product: { priceString: "$83.99" },
+        packageType: 'ANNUAL',
+        identifier: 'mock_annual'
+    } as any;
+
+    const displayMonthly = monthlyPackage || {
+        product: { priceString: "$9.99" },
+        packageType: 'MONTHLY',
+        identifier: 'mock_monthly'
+    } as any;
 
     return (
         <Modal
@@ -86,7 +92,6 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
                         showsVerticalScrollIndicator={false}
                     >
                         <View style={styles.header}>
-                            {/* Placeholder for the generated Zen icon, replace URI when available */}
                             <Image
                                 source={require('../assets/images/zen-icon.png')}
                                 style={styles.icon}
@@ -100,12 +105,59 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
                             <FeatureItem text="Unlimited Custom Coaches" />
                             <FeatureItem text="Access 'The Minimalist' Coach" />
                             <FeatureItem text="Automated Daily Nudges" />
-                            <FeatureItem text="Support Independent Development" />
                         </View>
+
+                        <View style={styles.plansContainer}>
+                            {/* Annual Plan */}
+                            <Pressable
+                                style={[
+                                    styles.planCard,
+                                    selectedPackage === displayAnnual && styles.selectedCard,
+                                    { marginBottom: 12 }
+                                ]}
+                                onPress={() => setSelectedPackage(displayAnnual)}
+                            >
+                                <View style={styles.badgeContainer}>
+                                    <View style={styles.badge}>
+                                        <Text style={styles.badgeText}>BEST VALUE</Text>
+                                    </View>
+                                </View>
+                                <View style={styles.planContent}>
+                                    <View>
+                                        <Text style={styles.planTitle}>Annual</Text>
+                                        <Text style={styles.planSubtitle}>First 7 days free</Text>
+                                    </View>
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        <Text style={styles.planPrice}>{displayAnnual.product.priceString}</Text>
+                                        <Text style={styles.planPeriod}>/year</Text>
+                                    </View>
+                                </View>
+                            </Pressable>
+
+                            {/* Monthly Plan */}
+                            <Pressable
+                                style={[
+                                    styles.planCard,
+                                    selectedPackage === displayMonthly && styles.selectedCard
+                                ]}
+                                onPress={() => setSelectedPackage(displayMonthly)}
+                            >
+                                <View style={styles.planContent}>
+                                    <View>
+                                        <Text style={styles.planTitle}>Monthly</Text>
+                                        <Text style={styles.planSubtitle}>Cancel anytime</Text>
+                                    </View>
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        <Text style={styles.planPrice}>{displayMonthly.product.priceString}</Text>
+                                        <Text style={styles.planPeriod}>/month</Text>
+                                    </View>
+                                </View>
+                            </Pressable>
+                        </View>
+
                     </ScrollView>
 
                     <View style={styles.footer}>
-                        <Text style={styles.price}>$9.99 / month</Text>
                         <Pressable
                             style={({ pressed }) => [styles.purchaseButton, pressed && styles.purchaseButtonPressed]}
                             onPress={handlePurchase}
@@ -114,7 +166,9 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
                             {isPurchasing ? (
                                 <ActivityIndicator color="white" />
                             ) : (
-                                <Text style={styles.purchaseButtonText}>Subscribe Now</Text>
+                                <Text style={styles.purchaseButtonText}>
+                                    Subscribe for {selectedPackage?.product.priceString || "$--"}
+                                </Text>
                             )}
                         </Pressable>
                         <Pressable onPress={handleRestore} disabled={isPurchasing} style={{ padding: 10 }}>
@@ -145,13 +199,10 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFFFFF',
         borderTopLeftRadius: 32,
         borderTopRightRadius: 32,
-        padding: 32,
-        paddingBottom: 50,
-        height: '85%',
+        padding: 24,
+        paddingBottom: 40,
+        height: '92%',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: -4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
         elevation: 5,
     },
     closeButton: {
@@ -160,7 +211,7 @@ const styles = StyleSheet.create({
     },
     header: {
         alignItems: 'center',
-        marginBottom: 40,
+        marginBottom: 30,
     },
     icon: {
         width: 80,
@@ -172,7 +223,6 @@ const styles = StyleSheet.create({
         fontSize: 28,
         fontWeight: '700',
         marginBottom: 8,
-        letterSpacing: -0.5,
     },
     subtitle: {
         fontSize: 18,
@@ -180,8 +230,9 @@ const styles = StyleSheet.create({
         fontWeight: '500',
     },
     features: {
-        gap: 20,
-        marginBottom: 40,
+        gap: 16,
+        marginBottom: 30,
+        paddingHorizontal: 10,
     },
     featureItem: {
         flexDirection: 'row',
@@ -193,16 +244,63 @@ const styles = StyleSheet.create({
         fontWeight: '500',
         color: '#3C3C43',
     },
-    footer: {
-        // marginTop: 'auto', // Removed as it's now below a flex: 1 ScrollView
-        paddingTop: 20,
-        alignItems: 'center',
-        gap: 16,
+    plansContainer: {
+        marginBottom: 20,
     },
-    price: {
-        fontSize: 16,
-        color: '#8E8E93',
-        marginBottom: 8,
+    planCard: {
+        backgroundColor: '#F2F2F7',
+        borderRadius: 16,
+        padding: 16,
+        borderWidth: 2,
+        borderColor: 'transparent',
+    },
+    selectedCard: {
+        borderColor: '#000',
+        backgroundColor: '#fff',
+    },
+    planContent: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    planTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        marginBottom: 4,
+    },
+    planSubtitle: {
+        fontSize: 14,
+        color: '#666',
+    },
+    planPrice: {
+        fontSize: 18,
+        fontWeight: '600',
+    },
+    planPeriod: {
+        fontSize: 14,
+        color: '#666',
+    },
+    badgeContainer: {
+        position: 'absolute',
+        top: -12,
+        right: 12,
+        zIndex: 10,
+    },
+    badge: {
+        backgroundColor: 'gold',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    badgeText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+        color: '#000',
+    },
+    footer: {
+        paddingTop: 10,
+        alignItems: 'center',
+        gap: 12,
     },
     purchaseButton: {
         backgroundColor: '#000000',

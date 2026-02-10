@@ -175,7 +175,7 @@ export default function ChatScreen() {
             }
 
             // Model Selection
-            const modelName = 'gemini-2.0-flash-001';
+            const modelName = 'gemini-3-flash-preview';
 
             const model = genAI.getGenerativeModel({
                 model: modelName,
@@ -184,7 +184,7 @@ export default function ChatScreen() {
 
             const chat = model.startChat({
                 history: messages.map((msg) => ({
-                    role: msg.sender,
+                    role: msg.sender === 'user' ? 'user' : 'model',
                     parts: [{ text: msg.text }],
                 })),
                 generationConfig: {

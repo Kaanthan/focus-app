@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { LogBox } from 'react-native';
 import 'react-native-reanimated';
 
+import { AuthProvider } from '@/components/AuthProvider';
 import { SubscriptionProvider } from '@/components/SubscriptionProvider';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -31,14 +32,16 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <SubscriptionProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </SubscriptionProvider>
+    <AuthProvider>
+      <SubscriptionProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          </Stack>
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </SubscriptionProvider>
+    </AuthProvider>
   );
 }
