@@ -1,26 +1,20 @@
 import { generateDynamicPrompt, getUserContext, UserContext } from '@/app/utils/CoachEngine';
 import Paywall from '@/components/Paywall';
 import { useSubscription } from '@/components/SubscriptionProvider';
+import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
+// FileSystem removed in favor of fetch/blob
+import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams } from 'expo-router';
+import * as Speech from 'expo-speech';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// MOCK: Prevent crash on stale binary
-const Clipboard = { setStringAsync: async (content: string) => console.log('Mock Copy', content) };
-const Haptics = {
-    impactAsync: async (style?: any) => console.log('Mock Impact', style),
-    notificationAsync: async (type?: any) => console.log('Mock Notification', type),
-    ImpactFeedbackStyle: { Heavy: 'heavy' },
-    NotificationFeedbackType: { Success: 'success' }
-};
-const Speech = {
-    speak: (text: string, options?: any) => console.log('Mock Speak:', text, options),
-    stop: () => console.log('Mock Stop Speaking')
-};
+import * as Clipboard from 'expo-clipboard'; // Real Clipboard
 
 const genAI = new GoogleGenerativeAI(process.env.EXPO_PUBLIC_GOOGLE_AI_API_KEY || '');
 
@@ -43,10 +37,13 @@ export default function ChatScreen() {
     const [userContext, setUserContext] = useState<UserContext | null>(null);
 
     const [isHistoryLoaded, setIsHistoryLoaded] = useState(false);
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
     const [isListening, setIsListening] = useState(false);
     const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
     const [showPaywall, setShowPaywall] = useState(false);
     const [showLimitModal, setShowLimitModal] = useState(false);
+    const [showToast, setShowToast] = useState(false); // Toast State
+    const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
     useEffect(() => {
         loadContext();
@@ -100,15 +97,18 @@ export default function ChatScreen() {
         if (isPro) return true;
 
         try {
-            const today = new Date().toISOString().split('T')[0];
-            const usageJson = await AsyncStorage.getItem('daily_usage');
-            let usage = { date: today, count: 0 };
+            // User Specific Limit Key based on Supabase ID
+            const { data: { session } } = await supabase.auth.getSession();
+            const userId = session?.user?.id || 'guest';
+
+            const today = new Date().toDateString();
+            const storageKey = `daily_usage_${userId}_${today}`;
+
+            const usageJson = await AsyncStorage.getItem(storageKey);
+            let usage = { count: 0 };
 
             if (usageJson) {
-                const parsed = JSON.parse(usageJson);
-                if (parsed.date === today) {
-                    usage = parsed;
-                }
+                usage = JSON.parse(usageJson);
             }
 
             if (usage.count >= 10) {
@@ -118,7 +118,7 @@ export default function ChatScreen() {
 
             // Increment and save
             usage.count += 1;
-            await AsyncStorage.setItem('daily_usage', JSON.stringify(usage));
+            await AsyncStorage.setItem(storageKey, JSON.stringify(usage));
             return true;
         } catch (e) {
             console.error("Error checking limit", e);
@@ -146,7 +146,7 @@ export default function ChatScreen() {
 
         try {
             let systemInstruction = '';
-            const baseInstruction = "Speak like a senior project editor helping a peer. Never use jargon like 'LLM', 'Token', or 'AI'.";
+            const baseInstruction = "Speak like a senior project editor helping a peer. Never use jargon like 'LLM', 'Token', or 'AI'. Keep it concise. Do not use hashtags. Do not use markdown headers.";
 
             // Generate Dynamic Prompt
             if (persona === 'dynamic') {
@@ -171,16 +171,19 @@ export default function ChatScreen() {
 
             // Standup Mode Override (Highest Priority)
             if (textToSend.toLowerCase().includes("daily review") || textToSend.toLowerCase().includes("standup")) {
-                systemInstruction = `${baseInstruction} You are conducting a Daily Standup. Ask these 3 questions ONE BY ONE. Wait for the answer before asking the next. 1. What did you say NO to today? 2. What is the ONE thing you shipped? 3. Are you blocked? At the end, provide a 1-sentence summary.`;
+                systemInstruction = `${baseInstruction} You are conducting a Daily Standup. Ask these 3 questions ONE BY ONE. Wait for the answer before asking the next. 1. What did you say NO to today? 2. What is the ONE thing you shipped? 3. Are you blocked? At the end, provide a 1-sentence summary. No hashtags.`;
             }
 
-            // Model Selection
-            const modelName = 'gemini-3-flash-preview';
+            // Model Selection - Use Stable Model
+            const modelName = 'gemini-1.5-flash';
+
+            // FORCE Constraint at the end
+            const finalSystemInstruction = `${systemInstruction} REMEMBER: Answer in under 50 words. NO HASHTAGS.`;
 
             const model = genAI.getGenerativeModel({
                 model: modelName,
-                systemInstruction: systemInstruction,
-            }, { apiVersion: 'v1beta' });
+                systemInstruction: finalSystemInstruction,
+            });
 
             const chat = model.startChat({
                 history: messages.map((msg) => ({
@@ -237,24 +240,122 @@ export default function ChatScreen() {
 
     const copyToClipboard = async (text: string, id: string) => {
         await Clipboard.setStringAsync(text);
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); // Haptics mock removed, can re-add if package installed
         setCopiedMessageId(id);
-        setTimeout(() => setCopiedMessageId(null), 2000);
+        setShowToast(true);
+        setTimeout(() => {
+            setCopiedMessageId(null);
+            setShowToast(false);
+        }, 2000);
     };
 
-    const handleSpeak = (text: string) => {
-        const rate = title === 'The Minimalist' ? 0.9 : 1.0;
-        Speech.speak(text, { rate });
+    const handleSpeak = async (text: string, id: string) => {
+        if (speakingMessageId === id) {
+            // Stop
+            await Speech.stop();
+            setSpeakingMessageId(null);
+        } else {
+            // Play new
+            if (speakingMessageId) await Speech.stop();
+            setSpeakingMessageId(id);
+            const rate = title === 'The Minimalist' ? 0.9 : 1.0;
+            Speech.speak(text, {
+                rate,
+                onDone: () => setSpeakingMessageId(null),
+                onStopped: () => setSpeakingMessageId(null),
+            });
+        }
+    };
+
+    const uriToBase64 = async (uri: string): Promise<string> => {
+        try {
+            const response = await fetch(uri);
+            const blob = await response.blob();
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64data = reader.result as string;
+                    // base64data is "data:mime;base64,..."
+                    resolve(base64data.split(',')[1]);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        } catch (error) {
+            console.error("uriToBase64 failed", error);
+            throw error;
+        }
+    };
+
+    const transcribeUserAudio = async (uri: string) => {
+        try {
+            setLoadingMessage('Listening...');
+            setIsLoading(true);
+
+            // Use fetch + FileReader (Standard Web API) - Most reliable for Expo now
+            const base64Audio = await uriToBase64(uri);
+
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const result = await model.generateContent([
+                {
+                    inlineData: {
+                        mimeType: "audio/m4a",
+                        data: base64Audio
+                    }
+                },
+                { text: "Transcribe this audio exactly as spoken. Do not add any commentary." },
+            ]);
+
+            const transcription = result.response.text();
+            if (transcription) {
+                setInputText(transcription.trim());
+                // Optional: Auto-send could go here
+            }
+        } catch (error: any) {
+            console.error("Transcription failed", error);
+            Alert.alert("Transcription Error", error.message || "Could not process audio.");
+        } finally {
+            setLoadingMessage('');
+            setIsLoading(false);
+        }
     };
 
     const handleMicPress = async () => {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-        if (isListening) {
+
+        if (recording) {
+            // Stop Recording
             setIsListening(false);
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
+            setRecording(null);
+
+            if (uri) {
+                transcribeUserAudio(uri);
+            }
         } else {
-            setIsListening(true);
-            // Simulate stopping after a few seconds or waiting for input
-            // For now, toggle makes sense for UI testing
+            // Start Recording
+            try {
+                const permission = await Audio.requestPermissionsAsync();
+
+                if (permission.status === 'granted') {
+                    await Audio.setAudioModeAsync({
+                        allowsRecordingIOS: true,
+                        playsInSilentModeIOS: true,
+                    });
+
+                    const { recording } = await Audio.Recording.createAsync(
+                        Audio.RecordingOptionsPresets.HIGH_QUALITY
+                    );
+                    setRecording(recording);
+                    setIsListening(true);
+                } else {
+                    console.warn("Permission not granted", permission);
+                    alert("Please enable microphone permissions in settings.");
+                }
+            } catch (err) {
+                console.error('Failed to start recording', err);
+            }
         }
     };
 
@@ -284,8 +385,8 @@ export default function ChatScreen() {
                         <Ionicons name={copiedMessageId === item.id ? "checkmark-circle" : "copy-outline"} size={14} color="#8E8E93" />
                         {copiedMessageId === item.id && <Text style={{ fontSize: 10, color: '#8E8E93' }}>Copied</Text>}
                     </Pressable>
-                    <Pressable onPress={() => handleSpeak(item.text)} hitSlop={10}>
-                        <Ionicons name="volume-high-outline" size={14} color="#8E8E93" />
+                    <Pressable onPress={() => handleSpeak(item.text, item.id)} hitSlop={10}>
+                        <Ionicons name={speakingMessageId === item.id ? "stop-circle-outline" : "volume-high-outline"} size={14} color="#8E8E93" />
                     </Pressable>
                 </View>
             )}
@@ -296,12 +397,22 @@ export default function ChatScreen() {
         <SafeAreaView style={styles.container}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee' }}>
                 <Text style={{ fontSize: 18, fontWeight: '600' }}>{title || 'Coach'}</Text>
-                {isPro && <View style={{ backgroundColor: 'gold', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}><Text style={{ fontSize: 10, fontWeight: 'bold' }}>PRO</Text></View>}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Pressable onPress={() => {
+                        Alert.alert('Clear History', 'Are you sure?', [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Clear', style: 'destructive', onPress: () => { setMessages([]); AsyncStorage.removeItem(`chat_history_${title}`); } }
+                        ]);
+                    }}>
+                        <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                    </Pressable>
+                    {isPro && <View style={{ backgroundColor: 'gold', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}><Text style={{ fontSize: 10, fontWeight: 'bold' }}>PRO</Text></View>}
+                </View>
             </View>
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={{ flex: 1 }}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
             >
                 <FlatList
                     ref={flatListRef}
@@ -326,10 +437,13 @@ export default function ChatScreen() {
                             contentContainerStyle={styles.suggestionsContainer}
                             style={{ maxHeight: 50, marginBottom: 8 }}
                         >
-                            <SuggestionChip title="Critique current task" onPress={() => sendMessage("Critique my current task")} />
-                            <SuggestionChip title="Identify distraction" onPress={() => sendMessage("Identify one distraction")} />
-                            <SuggestionChip title="Simplify next step" onPress={() => sendMessage("Simplify my next step")} />
-                            <SuggestionChip title="Start Daily Review" onPress={() => sendMessage("Start Daily Review")} />
+                            <CategoryPill title="Deep Work" icon="briefcase" onPress={() => sendMessage("Help me focus on Deep Work")} />
+                            <CategoryPill title="Stress" icon="medical" onPress={() => sendMessage("I'm feeling stressed. Help me decompress.")} />
+                            <CategoryPill title="Planning" icon="calendar" onPress={() => sendMessage("Help me plan my day")} />
+                            <CategoryPill title="Motivation" icon="flame" onPress={() => sendMessage("I need motivation")} />
+                            <CategoryPill title="Critique" icon="eye" onPress={() => sendMessage("Critique my current task")} />
+                            <CategoryPill title="Simplify" icon="cut" onPress={() => sendMessage("Simplify my next step")} />
+                            <CategoryPill title="Daily Review" icon="checkmark-done-circle" onPress={() => sendMessage("Start Daily Review")} />
                         </ScrollView>
                     )}
 
@@ -356,6 +470,15 @@ export default function ChatScreen() {
                     </View>
                 </View>
             </KeyboardAvoidingView>
+
+            {/* Toast Notification */}
+            {showToast && (
+                <View style={{ position: 'absolute', top: 50, left: 0, right: 0, alignItems: 'center', zIndex: 100 }}>
+                    <View style={{ backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 }}>
+                        <Text style={{ color: 'white', fontWeight: 'bold' }}>Copied to clipboard</Text>
+                    </View>
+                </View>
+            )}
 
             {/* Limit Reached Modal */}
             <Modal
@@ -388,13 +511,14 @@ export default function ChatScreen() {
     );
 }
 
-function SuggestionChip({ title, onPress }: { title: string; onPress: () => void }) {
+function CategoryPill({ title, icon, onPress }: { title: string; icon: any; onPress: () => void }) {
     return (
         <Pressable
-            style={({ pressed }) => [styles.suggestionChip, pressed && { opacity: 0.7 }]}
+            style={({ pressed }) => [styles.categoryPill, pressed && { opacity: 0.7 }]}
             onPress={onPress}
         >
-            <Text style={styles.suggestionText}>{title}</Text>
+            <Ionicons name={icon} size={14} color="#000" style={{ marginRight: 6 }} />
+            <Text style={styles.categoryText}>{title}</Text>
         </Pressable>
     );
 }
@@ -464,17 +588,22 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         gap: 8,
     },
-    suggestionChip: {
-        backgroundColor: '#F2F2F7',
+    categoryPill: {
+        backgroundColor: '#FFFFFF',
         paddingHorizontal: 16,
         paddingVertical: 8,
-        borderRadius: 16,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#E5E5EA',
         justifyContent: 'center',
+        marginRight: 8,
     },
-    suggestionText: {
+    categoryText: {
         fontSize: 14,
         color: '#000',
-        fontWeight: '500',
+        fontWeight: '600',
     },
     modalOverlay: {
         flex: 1,

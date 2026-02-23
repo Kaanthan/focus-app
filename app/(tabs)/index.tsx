@@ -1,10 +1,12 @@
-import { generateCoachDescription, generateCoachTitle, getUserContext } from '@/app/utils/CoachEngine';
+import { getUserContext } from '@/app/utils/CoachEngine';
 import Paywall from '@/components/Paywall'; // Ensure this path is correct based on your file structure
 import { useSubscription } from '@/components/SubscriptionProvider';
+import { supabase } from '@/lib/supabase';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -23,49 +25,175 @@ export default function HomeScreen() {
   ];
 
   const [coaches, setCoaches] = useState(defaultCoaches);
+  const [customCoaches, setCustomCoaches] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newCoachName, setNewCoachName] = useState('');
   const [newCoachPersona, setNewCoachPersona] = useState('');
+
+  // Retune Modal State
+  const [isRetuneModalVisible, setIsRetuneModalVisible] = useState(false);
+  const [retunePursuit, setRetunePursuit] = useState('');
+  const [retuneNoise, setRetuneNoise] = useState('');
+  const [isRetuning, setIsRetuning] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       const loadData = async () => {
         try {
-          // Onboarding Check
-          const context = await getUserContext();
+          // 1. Get Session
+          const { data: { session } } = await supabase.auth.getSession();
+          let context = null;
+
+          if (session?.user) {
+            // Load Custom Coaches first (independent of session mostly, but good to have)
+            const savedCustom = await AsyncStorage.getItem('user_custom_coaches');
+            if (savedCustom) {
+              const parsed = JSON.parse(savedCustom);
+              setCustomCoaches(parsed);
+            }
+
+            // 2. Try Fetch from Supabase (Source of Truth)
+            const { data, error } = await supabase
+              .from('profiles')
+              .select('persona_data, onboarding_completed')
+              .eq('id', session.user.id)
+              .maybeSingle(); // Use maybeSingle to handle 'Not Found' gracefully
+
+            // Handle Deleted/Missing Profile
+            if (!data && !error) {
+              console.log("User has session but no profile (Likely Deleted). Forcing Logout.");
+              await supabase.auth.signOut();
+              await AsyncStorage.clear(); // Nuke everything
+              router.replace('/auth');
+              return;
+            }
+
+            // 2.5 STALE CACHE CHECK
+            // Check if we have a stored user ID. If it differs, CLEAR EVERYTHING.
+            const lastUserId = await AsyncStorage.getItem('last_user_id');
+            if (lastUserId !== session.user.id) {
+              console.log("New User Detected! Clearing stale cache...");
+              await AsyncStorage.removeItem('ai_personas');
+              await AsyncStorage.removeItem('user_persona');
+              await AsyncStorage.setItem('last_user_id', session.user.id);
+              // Also clear context variable to force fetch/regen
+              context = null;
+            }
+
+            if (data?.persona_data) {
+              context = data.persona_data;
+              // Update local cache while we are at it
+              await AsyncStorage.setItem('user_persona', JSON.stringify(context));
+            } else {
+              // Fallback to local if DB fails or empty
+              const local = await getUserContext();
+              context = local;
+            }
+
+            // Explicit Check for Onboarding Status
+            const localCompleted = await AsyncStorage.getItem('onboarding_completed');
+            let isCompleted = data?.onboarding_completed;
+
+            if (localCompleted === 'true') {
+              // Local completion takes precedence (optimistic)
+              isCompleted = true;
+            } else if (isCompleted === undefined || isCompleted === null) {
+              // Fallback if local is empty and DB is empty
+              isCompleted = false;
+            }
+
+            if (isCompleted !== true) {
+              console.log("User onboarding not complete (DB: " + data?.onboarding_completed + ", Local: " + localCompleted + "), redirecting to survey.");
+              router.replace('/survey');
+              return;
+            }
+          } else {
+            // No session -> Redirect to Login/Signup first
+            // We want to force authentication before onboarding
+            console.log("No session found, redirecting to Auth.");
+            router.replace('/auth');
+            return;
+          }
+
+          // ... (fetch session logic remains)
+
           if (!context) {
-            // If no context, force survey.
-            // But valid point: if they just installed, they need to see something.
-            // "appears before the Home screen"
+            // ... (redirect logic remains)
+            console.log("No context found, redirecting to survey.");
             router.replace('/survey');
             return;
           }
 
-          // Load Custom Coaches
-          const savedCoaches = await AsyncStorage.getItem('custom_coaches');
-          let customCoaches = [];
-          if (savedCoaches) {
-            customCoaches = JSON.parse(savedCoaches);
-          }
+          // ... (custom coaches logic remains)
 
           // Dynamic Persona Logic
-          const dynamicTitle = generateCoachTitle(context, isPro);
-          const dynamicDescription = generateCoachDescription(context, isPro);
+          let displayedCoaches = [];
 
-          // NOTE: We don't need to generate the FULL prompt here, just the UI elements.
-          // The ChatScreen will generate the prompt on the fly using CoachEngine.
+          if (context) {
+            // 1. Try to get cached AI personas
+            if (context.ai_personas && context.ai_personas.length > 0) {
+              displayedCoaches = context.ai_personas;
+              await AsyncStorage.setItem('ai_personas', JSON.stringify(displayedCoaches));
+            }
 
-          const updatedDefaults = [
-            {
-              title: dynamicTitle,
-              description: dynamicDescription,
-              persona: 'dynamic'
-            },
-            { title: 'The Minimalist', description: 'Cut the noise. Ruthless prioritization.', persona: '' },
-            { title: 'The Habit Builder', description: 'Consistency and daily systems.', persona: '' },
-          ];
+            // 2. If empty, check local storage
+            if (displayedCoaches.length === 0) {
+              const cachedPersonas = await AsyncStorage.getItem('ai_personas');
+              if (cachedPersonas) {
+                const parsed = JSON.parse(cachedPersonas);
+                if (parsed.length > 0) displayedCoaches = parsed;
+              }
+            }
 
-          setCoaches([...updatedDefaults, ...customCoaches]);
+            // 3. GENERATION TRAP
+            // If we are Pro, and we STILL don't have displayed coaches (or they are defaults),
+            // We MUST generate them.
+            if (isPro && displayedCoaches.length === 0) {
+              console.log("User is Pro but has no AI cards. Generating now...");
+              // Show loading state or skeleton here if possible, for now just log
+
+              import('@/app/utils/CoachEngine').then(async (module) => {
+                try {
+                  const aiPersonas = await module.generatePersonas(context);
+                  if (aiPersonas && aiPersonas.length > 0) {
+                    displayedCoaches = aiPersonas;
+                    await AsyncStorage.setItem('ai_personas', JSON.stringify(aiPersonas));
+
+                    // Sync to Supabase
+                    const updatedContext = { ...context, ai_personas: aiPersonas };
+                    await supabase.from('profiles').update({
+                      persona_data: updatedContext
+                    }).eq('id', session.user.id);
+
+                    // Update UI immediately
+                    setCoaches([...aiPersonas, ...customCoaches]);
+                  }
+                } catch (err) {
+                  console.error("Generation failed", err);
+                }
+              });
+            } else if (!isPro && displayedCoaches.length === 0) {
+              // Free user, no AI cards yet -> Generate them anyway! 
+              // We want free users to SEE them, just not open them (handled by lock logic).
+              // So we use the SAME logic.
+              console.log("Generating AI Personas for Free User...");
+              import('@/app/utils/CoachEngine').then(async (module) => {
+                const aiPersonas = await module.generatePersonas(context);
+                displayedCoaches = aiPersonas;
+                await AsyncStorage.setItem('ai_personas', JSON.stringify(aiPersonas));
+                const updatedContext = { ...context, ai_personas: aiPersonas };
+                await supabase.from('profiles').update({ persona_data: updatedContext }).eq('id', session.user.id);
+                setCoaches([...aiPersonas, ...customCoaches]);
+              });
+            }
+          }
+
+          // Final Fallback if generation is pending or failed
+          if (displayedCoaches.length === 0) {
+            displayedCoaches = defaultCoaches;
+          }
+
+          setCoaches([...displayedCoaches, ...customCoaches]);
 
         } catch (e) {
           console.error('Failed to load data', e);
@@ -76,12 +204,75 @@ export default function HomeScreen() {
     }, [isPro])
   );
 
-  const handleRetunePress = () => {
+  const handleRetunePress = async () => {
     if (!isPro) {
       setShowPaywall(true);
       return;
     }
-    router.push('/survey');
+
+    try {
+      const jsonValue = await AsyncStorage.getItem('user_persona');
+      const context = jsonValue != null ? JSON.parse(jsonValue) : null;
+      if (context) {
+        setRetunePursuit(context.pursuit || '');
+        setRetuneNoise(context.noise || '');
+      }
+      setIsRetuneModalVisible(true);
+    } catch (e) {
+      console.error("Error loading context for retune", e);
+    }
+  };
+
+  const saveRetune = async () => {
+    if (!retunePursuit.trim() || !retuneNoise.trim()) return;
+    setIsRetuning(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+
+      // 1. Get Current Context
+      const jsonValue = await AsyncStorage.getItem('user_persona');
+      const currentContext = jsonValue != null ? JSON.parse(jsonValue) : {};
+
+      // 2. Update Context
+      const updatedContext = {
+        ...currentContext,
+        pursuit: retunePursuit,
+        noise: retuneNoise,
+        // Clear old personas to force regen
+        ai_personas: []
+      };
+
+      // 3. Save Local & DB
+      await AsyncStorage.setItem('user_persona', JSON.stringify(updatedContext));
+      await AsyncStorage.removeItem('ai_personas'); // Clear cache
+
+      await supabase.from('profiles').update({
+        persona_data: updatedContext
+      }).eq('id', session.user.id);
+
+      // 4. Regenerate Personas Immediately
+      const module = await import('@/app/utils/CoachEngine');
+      const aiPersonas = await module.generatePersonas(updatedContext);
+
+      // 5. Update UI
+      await AsyncStorage.setItem('ai_personas', JSON.stringify(aiPersonas));
+
+      // Update updatedContext with new personas for DB sync (optional but good)
+      updatedContext.ai_personas = aiPersonas;
+      await supabase.from('profiles').update({
+        persona_data: updatedContext
+      }).eq('id', session.user.id);
+
+      setCoaches([...aiPersonas, ...customCoaches]);
+
+      setIsRetuneModalVisible(false);
+    } catch (e) {
+      console.error("Retune failed", e);
+    } finally {
+      setIsRetuning(false);
+    }
   };
 
   const handleCreateCoachPress = async () => {
@@ -127,20 +318,73 @@ export default function HomeScreen() {
     }
   };
 
+  const [editingCoachIndex, setEditingCoachIndex] = useState<number | null>(null);
+
+  const handleLongPress = (index: number) => {
+    // Allow editing for ALL users (Requested by User)
+    setEditingCoachIndex(index);
+    setNewCoachName(coaches[index].title);
+    setNewCoachPersona(coaches[index].persona);
+    setIsModalVisible(true);
+  };
+
   const saveCustomCoach = async () => {
     if (!newCoachName.trim() || !newCoachPersona.trim()) return;
 
-    const newCoach = { title: newCoachName, description: 'Custom Coach', persona: newCoachPersona };
-    const updatedList = [...coaches, newCoach];
+    let updatedList = [...coaches];
+
+    if (editingCoachIndex !== null) {
+      // Edit Mode
+      updatedList[editingCoachIndex] = {
+        ...updatedList[editingCoachIndex],
+        title: newCoachName,
+        persona: newCoachPersona
+      };
+    } else {
+      // Create Mode
+      const newCoach = { title: newCoachName, description: 'Custom Coach', persona: newCoachPersona };
+      updatedList = [...coaches, newCoach];
+    }
+
     setCoaches(updatedList);
 
-    // Filter out defaults before saving
-    const customOnly = updatedList.slice(defaultCoaches.length);
-    await AsyncStorage.setItem('user_custom_coaches', JSON.stringify(customOnly));
+    // SYNC LOGIC
+    // We assume the first 3 are "AI/Standard" and the rest are "Custom".
+    // Or loosely: if it's in the first 3 indices, it's likely an AI persona we want to save to 'ai_personas'.
+
+    // 1. Separate AI Personas (derived from first few) vs Custom (extras)
+    // This is a bit loose but works for our "3 dynamic cards" logic.
+    const aiPersonasToSync = updatedList.slice(0, 3);
+    const customCoachesToSave = updatedList.slice(3);
+
+    // 2. Save Custom to Local
+    await AsyncStorage.setItem('user_custom_coaches', JSON.stringify(customCoachesToSave));
+
+    // 3. Save AI Personas to Local & Supabase
+    if (editingCoachIndex !== null && editingCoachIndex < 3) {
+      await AsyncStorage.setItem('ai_personas', JSON.stringify(aiPersonasToSync));
+
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          // Fetch current context to merge
+          const { data } = await supabase.from('profiles').select('persona_data').eq('id', session.user.id).single();
+          const currentContext = data?.persona_data || {};
+
+          await supabase.from('profiles').update({
+            persona_data: { ...currentContext, ai_personas: aiPersonasToSync }
+          }).eq('id', session.user.id);
+          console.log("Synced renamed AI persona to Supabase");
+        }
+      } catch (e) {
+        console.error("Failed to sync rename to Supabase", e);
+      }
+    }
 
     setIsModalVisible(false);
     setNewCoachName('');
     setNewCoachPersona('');
+    setEditingCoachIndex(null);
   };
 
   const handleCardPress = async (title: string, persona: string) => {
@@ -176,14 +420,25 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cardsContainer}>
-          {coaches.map((coach, index) => (
-            <CoachCard
-              key={index}
-              title={coach.title}
-              description={coach.description}
-              onPress={() => handleCardPress(coach.title, coach.persona)}
-            />
-          ))}
+          {coaches.map((coach, index) => {
+            const isLocked = !isPro && index > 0;
+            return (
+              <CoachCard
+                key={index}
+                title={coach.title}
+                description={coach.description}
+                isLocked={isLocked}
+                onPress={() => {
+                  if (isLocked) {
+                    setShowPaywall(true);
+                    return;
+                  }
+                  handleCardPress(coach.title, coach.persona);
+                }}
+                onLongPress={() => handleLongPress(index)}
+              />
+            );
+          })}
 
           <Pressable
             style={[styles.card, { borderStyle: 'dashed', borderWidth: 2, borderColor: '#C7C7CC', alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent', padding: 20 }]}
@@ -194,12 +449,14 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-      {/* Simple Modal for New Coach */}
+      {/* Modal for Creating OR Editing Coach */}
       {isModalVisible && (
         <View style={StyleSheet.absoluteFill}>
           <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 }}>
             <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 24 }}>
-              <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16 }}>Create Custom Coach</Text>
+              <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16 }}>
+                {editingCoachIndex !== null ? 'Edit Coach' : 'Create Custom Coach'}
+              </Text>
 
               <TextInput
                 placeholder="Coach Name (e.g. The Stoic)"
@@ -217,11 +474,52 @@ export default function HomeScreen() {
               />
 
               <View style={{ flexDirection: 'row', gap: 12 }}>
-                <Pressable onPress={() => setIsModalVisible(false)} style={{ flex: 1, padding: 16, alignItems: 'center' }}>
+                <Pressable onPress={() => { setIsModalVisible(false); setEditingCoachIndex(null); }} style={{ flex: 1, padding: 16, alignItems: 'center' }}>
                   <Text style={{ color: '#FF3B30', fontSize: 16, fontWeight: 'bold' }}>Cancel</Text>
                 </Pressable>
                 <Pressable onPress={saveCustomCoach} style={{ flex: 1, backgroundColor: '#007AFF', padding: 16, borderRadius: 12, alignItems: 'center' }}>
-                  <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Create</Text>
+                  <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>{editingCoachIndex !== null ? 'Save' : 'Create'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Retune Modal */}
+      {isRetuneModalVisible && (
+        <View style={StyleSheet.absoluteFill}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 24 }}>
+              <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 8 }}>
+                Retune Your Context
+              </Text>
+              <Text style={{ color: '#666', marginBottom: 20 }}>
+                Update your focus. Your AI coaches will morph to match.
+              </Text>
+
+              <Text style={{ fontWeight: '600', marginBottom: 8 }}>Current Pursuit</Text>
+              <TextInput
+                placeholder="e.g. Launching my MVP"
+                style={{ backgroundColor: '#F2F2F7', padding: 12, borderRadius: 12, marginBottom: 16, fontSize: 16 }}
+                value={retunePursuit}
+                onChangeText={setRetunePursuit}
+              />
+
+              <Text style={{ fontWeight: '600', marginBottom: 8 }}>Current Noise / Blocker</Text>
+              <TextInput
+                placeholder="e.g. Procrastination, Overthinking"
+                style={{ backgroundColor: '#F2F2F7', padding: 12, borderRadius: 12, marginBottom: 24, fontSize: 16 }}
+                value={retuneNoise}
+                onChangeText={setRetuneNoise}
+              />
+
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <Pressable onPress={() => setIsRetuneModalVisible(false)} style={{ flex: 1, padding: 16, alignItems: 'center' }} disabled={isRetuning}>
+                  <Text style={{ color: '#FF3B30', fontSize: 16, fontWeight: 'bold' }}>Cancel</Text>
+                </Pressable>
+                <Pressable onPress={saveRetune} style={{ flex: 1, backgroundColor: '#000', padding: 16, borderRadius: 12, alignItems: 'center' }} disabled={isRetuning}>
+                  <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>{isRetuning ? 'Retuning...' : 'Update'}</Text>
                 </Pressable>
               </View>
             </View>
@@ -234,19 +532,55 @@ export default function HomeScreen() {
   );
 }
 
-function CoachCard({ title, description, onPress }: { title: string; description: string; onPress: () => void }) {
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+
+// ... (keep other imports)
+
+function CoachCard({ title, description, onPress, onLongPress, isLocked }: { title: string; description: string; onPress: () => void; onLongPress: () => void; isLocked?: boolean }) {
+  // Random start time to make them feel organic/independent
+  const randomDelay = Math.random() * 2000;
+
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(1);
+
+  useEffect(() => {
+    if (!isLocked) {
+      // Subtle breathing
+      scale.value = withDelay(randomDelay, withRepeat(
+        withSequence(
+          withTiming(1.02, { duration: 3000, easing: Easing.inOut(Easing.ease) }),
+          withTiming(1, { duration: 3000, easing: Easing.inOut(Easing.ease) })
+        ),
+        -1,
+        true
+      ));
+    }
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: isLocked ? 0.8 : opacity.value,
+  }));
+
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.card,
-        pressed && styles.cardPressed
-      ]}
       onPress={onPress}
+      onLongPress={onLongPress}
     >
-      <View style={styles.cardContent}>
-        <Text style={styles.cardTitle}>{title}</Text>
-        <Text style={styles.cardDescription}>{description}</Text>
-      </View>
+      <Animated.View style={[
+        styles.card,
+        animatedStyle,
+        isLocked && { opacity: 0.8 }
+      ]}>
+        {/* Content remains same, but wrapper is Animated.View */}
+        <View style={styles.cardContent}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Text style={styles.cardTitle}>{title}</Text>
+            {isLocked && <Ionicons name="lock-closed" size={24} color="#999" />}
+          </View>
+          <Text style={styles.cardDescription}>{description}</Text>
+        </View>
+      </Animated.View>
     </Pressable>
   );
 }

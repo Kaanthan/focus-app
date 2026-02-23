@@ -50,6 +50,14 @@
           "organization": "serisuriacom",
           "project": "react-native-focusai"
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
       ]
     ],
     "experiments": {

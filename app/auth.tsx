@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { supabase } from '../lib/supabase';
 
 export default function AuthScreen() {
@@ -9,49 +10,109 @@ export default function AuthScreen() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
-    const [isSignUp, setIsSignUp] = useState(false);
+    const [checkingProfile, setCheckingProfile] = useState(false); // New state for "Gatekeeping" check
+    const [mode, setMode] = useState<'login' | 'signup'>('login'); // Strict Mode State
 
-    async function signInWithEmail() {
-        setLoading(true);
-        const { error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        });
+    // Helper to check profile and redirect
+    const checkProfileAndRedirect = async (userId: string) => {
+        setCheckingProfile(true);
+        try {
+            // Check Supabase Profile
+            const { data, error } = await supabase
+                .from('profiles')
+                .select('onboarding_completed')
+                .eq('id', userId)
+                .single();
 
-        if (error) Alert.alert(error.message);
-        setLoading(false);
-        if (!error) {
-            // Navigate to Paywall or Home based on logic, but typically Paywall first for new users
-            // For now, let's assume we want to upsell immediately after auth
-            router.replace('/');
+            if (error && error.code !== 'PGRST116') {
+                // PGRST116 is "Row not found", which is expected for new users sometimes if trigger failed
+                console.error("Error fetching profile:", error);
+            }
+
+            if (data?.onboarding_completed) {
+                // User has finished survey -> Home
+                // Sync local cache
+                await AsyncStorage.setItem('onboarding_completed', 'true');
+                router.replace('/');
+            } else {
+                // User exists but hasn't finished survey -> Survey
+                router.replace('/survey');
+            }
+        } catch (e) {
+            console.error("Profile check failed", e);
+            router.replace('/survey'); // Fallback safe
+        } finally {
+            setCheckingProfile(false);
         }
-    }
+    };
 
-    async function signUpWithEmail() {
+    async function handleAuth() {
         setLoading(true);
-        const {
-            data: { session },
-            error,
-        } = await supabase.auth.signUp({
-            email,
-            password,
-        });
+        try {
+            if (mode === 'login') {
+                // STRICT LOGIN
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email,
+                    password,
+                });
 
-        if (error) Alert.alert(error.message);
-        else if (!session) Alert.alert('Please check your inbox for email verification!');
+                if (error) {
+                    Alert.alert("Login Failed", error.message); // Likely "Invalid login credentials"
+                    setLoading(false);
+                    return;
+                }
 
-        setLoading(false);
-        if (session) {
-            router.replace('/');
+                if (data.session?.user) {
+                    await checkProfileAndRedirect(data.session.user.id);
+                }
+            } else {
+                // STRICT SIGNUP
+                const { data, error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                });
+
+                if (error) {
+                    Alert.alert("Registration Failed", error.message); // Likely is "User already registered"
+                    setLoading(false);
+                    return;
+                }
+
+                if (data.session?.user) {
+                    // Create Profile entry immediately to lock them in
+                    // Optional: If you use a Trigger in SQL, this might be redundant, but safe to do here too.
+                    const { error: profileError } = await supabase.from('profiles').upsert({
+                        id: data.session.user.id,
+                        onboarding_completed: false, // Explicitly false
+                        updated_at: new Date().toISOString()
+                    });
+
+                    if (profileError) console.log("Initial profile creation warning:", profileError);
+
+                    // New users go to survey
+                    router.replace('/survey');
+                } else {
+                    Alert.alert('Check your inbox', 'Please check your inbox for email verification!');
+                }
+            }
+        } catch (e: any) {
+            Alert.alert("Error", e.message);
+        } finally {
+            setLoading(false);
         }
     }
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.container}
+        >
             <View style={[styles.verticallySpaced, styles.mt20]}>
                 <Ionicons name="finger-print" size={64} color="#000" style={{ alignSelf: 'center', marginBottom: 20 }} />
                 <Text style={styles.title}>Focus Architect</Text>
-                <Text style={styles.subtitle}>Sign in to save your persona.</Text>
+                <Text style={styles.subtitle}>
+                    {mode === 'login' ? "Sign in to your workspace." : "Create your account."}
+                </Text>
             </View>
 
             <View style={[styles.verticallySpaced, styles.mt20]}>
@@ -79,21 +140,62 @@ export default function AuthScreen() {
             <View style={[styles.verticallySpaced, styles.mt20]}>
                 <Pressable
                     style={[styles.button, styles.primaryButton]}
-                    onPress={isSignUp ? signUpWithEmail : signInWithEmail}
-                    disabled={loading}
+                    onPress={handleAuth}
+                    disabled={loading || checkingProfile}
                 >
-                    {loading ? <ActivityIndicator color="white" /> : <Text style={styles.buttonText}>{isSignUp ? "Sign Up" : "Sign In"}</Text>}
+                    {loading || checkingProfile ? (
+                        <View style={{ flexDirection: 'row', gap: 10 }}>
+                            <ActivityIndicator color="white" />
+                            {checkingProfile && <Text style={{ color: 'white' }}>Checking profile...</Text>}
+                        </View>
+                    ) : (
+                        <Text style={styles.buttonText}>{mode === 'login' ? "Sign In" : "Sign Up"}</Text>
+                    )}
                 </Pressable>
             </View>
 
+            {mode === 'login' && (
+                <View style={styles.verticallySpaced}>
+                    <Pressable
+                        onPress={async () => {
+                            if (!email) {
+                                Alert.alert("Error", "Please enter your email address first.");
+                                return;
+                            }
+                            setLoading(true);
+                            try {
+                                const { error } = await supabase.auth.resetPasswordForEmail(email);
+                                if (error) throw error;
+                                Alert.alert("Success", "Check your email for the password reset link.");
+                            } catch (error: any) {
+                                Alert.alert("Error", error.message);
+                            } finally {
+                                setLoading(false);
+                            }
+                        }}
+                        disabled={loading || checkingProfile}
+                        style={{ alignItems: 'center', padding: 10 }}
+                    >
+                        <Text style={[styles.secondaryText, { fontSize: 14 }]}>Forgot Password?</Text>
+                    </Pressable>
+                </View>
+            )
+            }
+
             <View style={styles.verticallySpaced}>
-                <Pressable onPress={() => setIsSignUp(!isSignUp)} disabled={loading} style={{ alignItems: 'center', padding: 10 }}>
-                    <Text style={styles.secondaryText}>{isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up"}</Text>
+                <Pressable
+                    onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}
+                    disabled={loading || checkingProfile}
+                    style={{ alignItems: 'center', padding: 10 }}
+                >
+                    <Text style={styles.secondaryText}>
+                        {mode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
+                    </Text>
                 </Pressable>
             </View>
 
             {/* Skip for Dev/Testing if needed, but per requirements we enforce Auth */}
-        </View>
+        </KeyboardAvoidingView >
     );
 }
 

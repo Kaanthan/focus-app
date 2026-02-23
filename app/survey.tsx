@@ -1,8 +1,9 @@
+import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 type QuestionType = {
@@ -37,30 +38,90 @@ export default function SurveyScreen() {
     const [currentStep, setCurrentStep] = useState(0);
     const [answers, setAnswers] = useState({ role: '', noise: '', tone: '' });
 
-    const handleNext = async () => {
+    const [loading, setLoading] = useState(false);
+
+    const handleNext = async (currentAnswers = answers) => {
+        // DEBUG ALERT - REMOVE LATER
+        // Alert.alert("Debug", `Step: ${currentStep}, Options: ${QUESTIONS.length}`);
+
         if (currentStep < QUESTIONS.length - 1) {
             setCurrentStep(currentStep + 1);
         } else {
             // Finish
+            console.log("Starting Finish Flow...");
+            setLoading(true);
             try {
-                // Save with the expected structure for CoachEngine
-                console.log("Saving Persona:", answers);
-                await AsyncStorage.setItem('user_persona', JSON.stringify({
-                    ...answers,
-                    pursuit: answers.role // Saving role as pursuit as well for clarity if needed
-                }));
-                router.replace('/auth');
-            } catch (e) {
-                console.error("Failed to save persona", e);
+                // ... rest of logic
+
+                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+                if (sessionError || !session?.user) {
+                    console.error("Session Error:", sessionError);
+                    Alert.alert("Error", "No authenticated user found. Please log in again.");
+                    router.replace('/auth');
+                    return;
+                }
+
+                // Prepare persona data - ensure it's a plain object
+                const personaData = {
+                    role: currentAnswers.role,
+                    noise: currentAnswers.noise,
+                    tone: currentAnswers.tone,
+                    pursuit: currentAnswers.role
+                };
+
+                console.log("Attempting to save persona for user:", session.user.id);
+                console.log("Persona Data:", JSON.stringify(personaData));
+
+                // Create a promise that rejects after 10 seconds
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Request timed out')), 10000)
+                );
+
+                // 1. Save to Supabase (Source of Truth) with timeout
+                const { error } = await Promise.race([
+                    supabase
+                        .from('profiles')
+                        .upsert({
+                            id: session.user.id,
+                            onboarding_completed: true,
+                            persona_data: personaData,
+                            updated_at: new Date().toISOString(),
+                        }),
+                    timeoutPromise
+                ]) as any;
+
+                if (error) {
+                    console.error("Supabase upsert failed:", error);
+                    console.error("Supabase error details:", JSON.stringify(error));
+                    Alert.alert("Error", `Failed to save profile: ${error.message || 'Unknown error'}. Please check your connection.`);
+                    return;
+                }
+
+                console.log("Supabase save successful");
+
+                // 2. Save to Local Storage (Cache for speed/offline)
+                await AsyncStorage.setItem('user_persona', JSON.stringify(personaData));
+                await AsyncStorage.setItem('onboarding_completed', 'true'); // Local flag for speed
+
+                console.log("Local storage save successful, navigating to home");
+                router.replace('/');
+            } catch (e: any) {
+                console.error("Failed to save persona (Catch Block)", e);
+                Alert.alert("Error", "An unexpected error occurred: " + (e.message || e));
+            } finally {
+                setLoading(false);
             }
         }
     };
 
     const handleOptionSelect = (option: string) => {
-        setAnswers({ ...answers, [QUESTIONS[currentStep].id]: option });
+        const newAnswers = { ...answers, [QUESTIONS[currentStep].id]: option };
+        setAnswers(newAnswers);
+
         // Auto advance for options
         setTimeout(() => {
-            handleNext();
+            handleNext(newAnswers);
         }, 200);
     };
 
@@ -87,8 +148,10 @@ export default function SurveyScreen() {
                                 style={({ pressed }) => [
                                     styles.optionButton,
                                     answers[currentQuestion.id] === option && styles.optionSelected,
-                                    pressed && styles.optionPressed
+                                    pressed && styles.optionPressed,
+                                    loading && { opacity: 0.7 }
                                 ]}
+                                disabled={loading}
                                 onPress={() => handleOptionSelect(option)}
                             >
                                 <Text style={[
@@ -107,14 +170,20 @@ export default function SurveyScreen() {
                             value={answers[currentQuestion.id]}
                             onChangeText={(text) => setAnswers({ ...answers, [currentQuestion.id]: text })}
                             autoFocus
-                            onSubmitEditing={handleNext}
+                            onSubmitEditing={() => handleNext()}
                             returnKeyType={currentStep === QUESTIONS.length - 1 ? "done" : "next"}
                         />
-                        <Pressable style={styles.button} onPress={handleNext}>
-                            <Text style={styles.buttonText}>
-                                {currentStep === QUESTIONS.length - 1 ? "Finish & Morph" : "Next"}
-                            </Text>
-                            <Ionicons name="arrow-forward" size={20} color="#FFF" />
+                        <Pressable style={[styles.button, loading && { opacity: 0.7 }]} onPress={() => handleNext()} disabled={loading}>
+                            {loading ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <>
+                                    <Text style={styles.buttonText}>
+                                        {currentStep === QUESTIONS.length - 1 ? "Finish & Morph" : "Next"}
+                                    </Text>
+                                    <Ionicons name="arrow-forward" size={20} color="#FFF" />
+                                </>
+                            )}
                         </Pressable>
                     </View>
                 )}

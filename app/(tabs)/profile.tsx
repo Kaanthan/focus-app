@@ -15,6 +15,13 @@ export default function ProfileScreen() {
     const [loading, setLoading] = useState(false);
 
     const handleSignOut = async () => {
+        try {
+            if (!__DEV__) {
+                await Purchases.logOut();
+            }
+        } catch (e) {
+            console.error("RC Logout Failed", e);
+        }
         const { error } = await supabase.auth.signOut();
         if (error) Alert.alert('Error signing out', error.message);
         router.replace('/auth');
@@ -22,12 +29,12 @@ export default function ProfileScreen() {
 
     const handleDeleteAccount = async () => {
         Alert.alert(
-            "Delete Account",
-            "Are you sure? This action is permanent and cannot be undone.",
+            "⚠️ PERMANENTLY DELETE?",
+            "This will wipe your data and cannot be undone. Are you absolutely sure?",
             [
                 { text: "Cancel", style: "cancel" },
                 {
-                    text: "Delete",
+                    text: "YES, DELETE ACCOUNT",
                     style: "destructive",
                     onPress: async () => {
                         setLoading(true);
@@ -41,16 +48,23 @@ export default function ProfileScreen() {
                                 // In a real prod app, you'd trigger an Edge Function here.
                             }
 
-                            // 2. Wipe Local Data
-                            await AsyncStorage.clear();
-
-                            // 3. Reset RevenueCat
+                            // 2. Reset RevenueCat
                             if (!__DEV__) {
-                                await Purchases.logOut();
+                                try {
+                                    const isAnon = await Purchases.isAnonymous();
+                                    if (!isAnon) {
+                                        await Purchases.logOut();
+                                    }
+                                } catch (rcError) {
+                                    console.log("RevenueCat Logout Error (Ignored):", rcError);
+                                }
                             }
 
-                            // 4. Sign Out Supabase
+                            // 3. Sign Out Supabase
                             await supabase.auth.signOut();
+
+                            // 4. Wipe Local Data (Last!)
+                            await AsyncStorage.clear();
 
                             Alert.alert("Account Deleted", "Your data has been wiped from this device.");
                             router.replace('/');

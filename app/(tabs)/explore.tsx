@@ -1,14 +1,16 @@
+import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const STORAGE_KEY = 'userContext';
+const STORAGE_KEY = 'user_persona';
 
 export default function TabTwoScreen() {
   const [mission, setMission] = useState('');
   const [principles, setPrinciples] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadContext();
@@ -16,25 +18,92 @@ export default function TabTwoScreen() {
 
   const loadContext = async () => {
     try {
+      // 1. Try Local Storage first for speed
       const jsonValue = await AsyncStorage.getItem(STORAGE_KEY);
       if (jsonValue != null) {
         const data = JSON.parse(jsonValue);
-        setMission(data.mission || '');
+        setMission(data.pursuit || '');
         setPrinciples(data.principles || '');
       }
+
+      // 2. Background Refresh from Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data } = await supabase
+          .from('profiles')
+          .select('persona_data')
+          .eq('id', session.user.id)
+          .single();
+
+        if (data?.persona_data) {
+          const remoteCtx = data.persona_data;
+          setMission(remoteCtx.pursuit || '');
+          setPrinciples(remoteCtx.principles || '');
+          // Update local to match remote
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(remoteCtx));
+        }
+      }
+
     } catch (e) {
       console.error('Failed to load context', e);
     }
   };
 
   const saveContext = async () => {
+    if (loading) return;
+    setLoading(true);
+
     try {
-      const value = JSON.stringify({ mission, principles });
-      await AsyncStorage.setItem(STORAGE_KEY, value);
-      Alert.alert('Saved', 'Your context has been saved.');
-    } catch (e) {
+      // 1. Get existing context to merge (preserve role, noise, tone)
+      const existingJson = await AsyncStorage.getItem(STORAGE_KEY);
+      const existingData = existingJson ? JSON.parse(existingJson) : {};
+
+      const updatedContext = {
+        ...existingData,
+        pursuit: mission,
+        principles: principles
+      };
+
+      // 2. Save Local
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedContext));
+
+      // 3. Save to Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        // Regenerate Personas with new context
+        try {
+          const module = await import('@/app/utils/CoachEngine');
+          const aiPersonas = await module.generatePersonas(updatedContext);
+
+          // Save new personas
+          await AsyncStorage.setItem('ai_personas', JSON.stringify(aiPersonas));
+
+          // Update Supabase with both context AND new personas
+          updatedContext.ai_personas = aiPersonas;
+
+          const { error } = await supabase
+            .from('profiles')
+            .update({ persona_data: updatedContext })
+            .eq('id', session.user.id);
+
+          if (error) throw error;
+        } catch (genError) {
+          console.error("Failed to regenerate personas", genError);
+          // Fallback: just save context if generation fails
+          const { error } = await supabase
+            .from('profiles')
+            .update({ persona_data: updatedContext })
+            .eq('id', session.user.id);
+          if (error) throw error;
+        }
+      }
+
+      Alert.alert('Saved', 'Your context has been updated. The AI will now reflect this.');
+    } catch (e: any) {
       console.error('Failed to save context', e);
-      Alert.alert('Error', 'Failed to save your context.');
+      Alert.alert('Error', 'Failed to save: ' + e.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -52,7 +121,7 @@ export default function TabTwoScreen() {
 
           <View style={styles.cardsContainer}>
             <View style={styles.card}>
-              <Text style={styles.cardLabel}>My Mission</Text>
+              <Text style={styles.cardLabel}>My Mission (Pursuit)</Text>
               <TextInput
                 style={styles.input}
                 placeholder="e.g. 12 Startups in 12 Months"
@@ -80,11 +149,13 @@ export default function TabTwoScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.saveButton,
-                pressed && styles.saveButtonPressed
+                pressed && styles.saveButtonPressed,
+                loading && { opacity: 0.5 }
               ]}
               onPress={saveContext}
+              disabled={loading}
             >
-              <Text style={styles.saveButtonText}>Save</Text>
+              <Text style={styles.saveButtonText}>{loading ? 'Saving...' : 'Save Context'}</Text>
             </Pressable>
           </View>
         </ScrollView>

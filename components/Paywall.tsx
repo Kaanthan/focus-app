@@ -3,6 +3,7 @@ import { BlurView } from 'expo-blur';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { PurchasesPackage } from 'react-native-purchases';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSubscription } from './SubscriptionProvider';
 
 interface PaywallProps {
@@ -72,6 +73,13 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
         identifier: 'mock_monthly'
     } as any;
 
+    const isLoadingOfferings = offerings.length === 0;
+
+    // Fix for "Purchase Error": If no packages and not just loading, show status
+    if (visible && isLoadingOfferings) {
+        // You might want to trigger a retry here or just show a status
+    }
+
     return (
         <Modal
             animationType="slide"
@@ -81,104 +89,113 @@ export default function Paywall({ visible, onClose }: PaywallProps) {
         >
             <View style={styles.container}>
                 <BlurView intensity={20} style={StyleSheet.absoluteFill} tint="light" />
-                <View style={styles.content}>
-                    <Pressable onPress={onClose} style={styles.closeButton}>
-                        <Ionicons name="close-circle" size={30} color="#8E8E93" />
-                    </Pressable>
+                <SafeAreaView style={styles.safeArea}>
+                    <View style={styles.content}>
+                        <Pressable onPress={onClose} style={styles.closeButton}>
+                            <Ionicons name="close-circle" size={30} color="#8E8E93" />
+                        </Pressable>
 
-                    <ScrollView
-                        style={{ flex: 1 }}
-                        contentContainerStyle={{ paddingBottom: 20 }}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <View style={styles.header}>
-                            <Image
-                                source={require('../assets/images/zen-icon.png')}
-                                style={styles.icon}
-                                resizeMode="contain"
-                            />
-                            <Text style={styles.title}>Focus Pro</Text>
-                            <Text style={styles.subtitle}>Unlock The Minimalist</Text>
-                        </View>
-
-                        <View style={styles.features}>
-                            <FeatureItem text="Unlimited Custom Coaches" />
-                            <FeatureItem text="Access 'The Minimalist' Coach" />
-                            <FeatureItem text="Automated Daily Nudges" />
-                        </View>
-
-                        <View style={styles.plansContainer}>
-                            {/* Annual Plan */}
-                            <Pressable
-                                style={[
-                                    styles.planCard,
-                                    selectedPackage === displayAnnual && styles.selectedCard,
-                                    { marginBottom: 12 }
-                                ]}
-                                onPress={() => setSelectedPackage(displayAnnual)}
-                            >
-                                <View style={styles.badgeContainer}>
-                                    <View style={styles.badge}>
-                                        <Text style={styles.badgeText}>BEST VALUE</Text>
-                                    </View>
-                                </View>
-                                <View style={styles.planContent}>
-                                    <View>
-                                        <Text style={styles.planTitle}>Annual</Text>
-                                        <Text style={styles.planSubtitle}>First 7 days free</Text>
-                                    </View>
-                                    <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={styles.planPrice}>{displayAnnual.product.priceString}</Text>
-                                        <Text style={styles.planPeriod}>/year</Text>
-                                    </View>
-                                </View>
-                            </Pressable>
-
-                            {/* Monthly Plan */}
-                            <Pressable
-                                style={[
-                                    styles.planCard,
-                                    selectedPackage === displayMonthly && styles.selectedCard
-                                ]}
-                                onPress={() => setSelectedPackage(displayMonthly)}
-                            >
-                                <View style={styles.planContent}>
-                                    <View>
-                                        <Text style={styles.planTitle}>Monthly</Text>
-                                        <Text style={styles.planSubtitle}>Cancel anytime</Text>
-                                    </View>
-                                    <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={styles.planPrice}>{displayMonthly.product.priceString}</Text>
-                                        <Text style={styles.planPeriod}>/month</Text>
-                                    </View>
-                                </View>
-                            </Pressable>
-                        </View>
-
-                    </ScrollView>
-
-                    <View style={styles.footer}>
-                        <Pressable
-                            style={({ pressed }) => [styles.purchaseButton, pressed && styles.purchaseButtonPressed]}
-                            onPress={handlePurchase}
-                            disabled={isPurchasing}
+                        <ScrollView
+                            style={{ flex: 1 }}
+                            contentContainerStyle={{ paddingBottom: 100 }}
+                            showsVerticalScrollIndicator={false}
                         >
-                            {isPurchasing ? (
-                                <ActivityIndicator color="white" />
+                            <View style={styles.header}>
+                                <Image
+                                    source={require('../assets/images/zen-icon.png')}
+                                    style={styles.icon}
+                                    resizeMode="contain"
+                                />
+                                <Text style={styles.title}>Focus Pro</Text>
+                                <Text style={styles.subtitle}>Unlock The System</Text>
+                            </View>
+
+                            <View style={styles.features}>
+                                <FeatureItem text="Unlimited Custom Architects" />
+                                <FeatureItem text="Access 'The Minimalist' Coach" />
+                                <FeatureItem text="Automated Daily Standups" />
+                            </View>
+
+                            {isLoadingOfferings ? (
+                                <View style={styles.loadingContainer}>
+                                    <ActivityIndicator size="large" color="#000" />
+                                    <Text style={styles.loadingText}>Connecting to Store...</Text>
+                                </View>
                             ) : (
-                                <Text style={styles.purchaseButtonText}>
-                                    Subscribe for {selectedPackage?.product.priceString || "$--"}
-                                </Text>
+                                <View style={styles.plansContainer}>
+                                    {/* Annual Plan */}
+                                    <Pressable
+                                        style={[
+                                            styles.planCard,
+                                            selectedPackage === displayAnnual && styles.selectedCard,
+                                            { marginBottom: 12 }
+                                        ]}
+                                        onPress={() => setSelectedPackage(displayAnnual)}
+                                    >
+                                        <View style={styles.badgeContainer}>
+                                            <View style={styles.badge}>
+                                                <Text style={styles.badgeText}>BEST VALUE</Text>
+                                            </View>
+                                        </View>
+                                        <View style={styles.planContent}>
+                                            <View>
+                                                <Text style={styles.planTitle}>Annual</Text>
+                                                <Text style={styles.planSubtitle}>First 7 days free</Text>
+                                            </View>
+                                            <View style={{ alignItems: 'flex-end' }}>
+                                                <Text style={styles.planPrice}>{displayAnnual.product.priceString}</Text>
+                                                <Text style={styles.planPeriod}>/year</Text>
+                                            </View>
+                                        </View>
+                                    </Pressable>
+
+                                    {/* Monthly Plan */}
+                                    <Pressable
+                                        style={[
+                                            styles.planCard,
+                                            selectedPackage === displayMonthly && styles.selectedCard
+                                        ]}
+                                        onPress={() => setSelectedPackage(displayMonthly)}
+                                    >
+                                        <View style={styles.planContent}>
+                                            <View>
+                                                <Text style={styles.planTitle}>Monthly</Text>
+                                                <Text style={styles.planSubtitle}>Cancel anytime</Text>
+                                            </View>
+                                            <View style={{ alignItems: 'flex-end' }}>
+                                                <Text style={styles.planPrice}>{displayMonthly.product.priceString}</Text>
+                                                <Text style={styles.planPeriod}>/month</Text>
+                                            </View>
+                                        </View>
+                                    </Pressable>
+                                </View>
                             )}
-                        </Pressable>
-                        <Pressable onPress={handleRestore} disabled={isPurchasing} style={{ padding: 10 }}>
-                            <Text style={styles.restoreText}>Restore Purchases</Text>
-                        </Pressable>
+
+                        </ScrollView>
+
+                        <View style={styles.footer}>
+                            <Pressable
+                                style={({ pressed }) => [styles.purchaseButton, pressed && styles.purchaseButtonPressed, (isPurchasing || isLoadingOfferings) && { opacity: 0.7 }]}
+                                onPress={handlePurchase}
+                                disabled={isPurchasing || isLoadingOfferings}
+                            >
+                                {isPurchasing ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text style={styles.purchaseButtonText}>
+                                        {isLoadingOfferings ? "Please wait..." : `Subscribe for ${selectedPackage?.product.priceString || "$--"}`}
+                                    </Text>
+                                )}
+                            </Pressable>
+                            <Pressable onPress={handleRestore} disabled={isPurchasing} style={{ padding: 10 }}>
+                                <Text style={styles.restoreText}>Restore Purchases</Text>
+                            </Pressable>
+                        </View>
                     </View>
-                </View>
+                </SafeAreaView>
             </View>
         </Modal>
-    );
+    )
 }
 
 function FeatureItem({ text }: { text: string }) {
@@ -194,16 +211,31 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         justifyContent: 'flex-end',
+        backgroundColor: 'rgba(0,0,0,0.5)', // Darker dim
+    },
+    safeArea: {
+        flex: 1,
+        justifyContent: 'flex-end',
     },
     content: {
         backgroundColor: '#FFFFFF',
         borderTopLeftRadius: 32,
         borderTopRightRadius: 32,
         padding: 24,
-        paddingBottom: 40,
-        height: '92%',
+        paddingBottom: 20,
+        height: '90%', // Slightly less than full height
         shadowColor: '#000',
         elevation: 5,
+    },
+    loadingContainer: {
+        padding: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+    },
+    loadingText: {
+        fontSize: 16,
+        color: '#666',
     },
     closeButton: {
         alignSelf: 'flex-end',
